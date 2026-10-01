@@ -13,8 +13,9 @@ uv sync
 Dependencies (see [`pipeline/pyproject.toml`](../pipeline/pyproject.toml)):
 
 - **cadquery** — STEP I/O and B-rep booleans  
+- **gmsh** — isotropic Frontal-Delaunay surface tessellation  
 - **numpy / scipy** — sampling, frames, quaternions  
-- **trimesh + rtree** — tessellation export, closest-point deviation  
+- **trimesh + rtree** — mesh export, closest-point deviation  
 
 Use Python **3.12**. CadQuery does not ship wheels for 3.14.
 
@@ -54,7 +55,7 @@ Targets about **30** indications:
 
 - Shaft axis is along **+X** through the STEP revolution axis origin.  
 - Sites stay off the bore (`radial > 55 mm`) and at least ~30 mm apart.  
-- Scoop sizes vary in three bands (~12–28 mm across, ~1.5–3.5 mm deep), capped by local wall thickness (~40%).  
+- Scoop sizes vary in three bands (~12–28 mm across, ~2–5 mm deep), capped by local wall thickness (~50%, and never above 5 mm).  
 
 Kinds written to meta: `flat_top`, `flat_bottom`, `fin`, `body`.
 
@@ -68,8 +69,10 @@ Cuts that create internal voids or remove an unreasonable volume are rejected or
 
 ### 3. Tessellation and noise
 
-- Linear deflection ≈ **0.35 mm**.  
-- On the excavated mesh only: displace vertices along normals with Gaussian σ = **0.05 mm** (seeded).  
+Tessellation happens first, on the unmodified surfaces. Noise is a later step.
+
+- **Isotropic** surface mesh (Gmsh Frontal-Delaunay) with equal minimum and maximum edge length, about **2.5 mm**, so triangles stay near-equilateral instead of stretching along the CAD faces.
+- **Then** Gaussian noise, on the excavated mesh only: displace vertices along normals with σ = **0.05 mm** (seeded). The original mesh is not noised.  
 
 ### 4. Deviation
 
@@ -104,7 +107,8 @@ Constants near the top of `excavate.py`:
 
 - `TARGET_SITES`, `N_FLAT`, `N_OTHER`  
 - `MIN_SPACING_MM`, `BORE_CLEARANCE_MM`  
-- `TESS_TOLERANCE`, `NOISE_SIGMA_MM`  
+- `TESS_EDGE_MM`, `NOISE_SIGMA_MM`  
+- `MAX_SCOOP_DEPTH_MM`  
 - `SEED` — reproducible site layout  
 - `SIZE_BANDS` — diameter / depth ranges  
 
@@ -116,5 +120,5 @@ Change these and re-run `excavate.py`. No viewer rebuild is required beyond a br
 |---------|----------------|
 | `ModuleNotFoundError: cadquery` | Wrong Python; use `.venv/bin/python` after `uv sync` |
 | Few flat indications | Tool/boolean skips; check log for `tool build failed` / void rejects |
-| Max deviation ≫ scoop depth | Remeshing / edge cases; use heatmap clamp ~3–4 mm for scoops |
+| Max deviation ≫ scoop depth | Remeshing / edge cases; use heatmap clamp ~5 mm for scoops |
 | Viewer shows old geometry | Pipeline did not finish copy, or hard-refresh the browser |
