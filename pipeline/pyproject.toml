@@ -1,0 +1,22 @@
+[project]
+name = "impeller-pipeline"
+version = "0.1.0"
+description = "Excavate weld-prep scoops in the impeller STEP and export heatmap assets"
+authors = [
+    { name = "Neil Xu", email = "xu3033@gmail.com" }
+]
+requires-python = ">=3.12"
+dependencies = [
+    "cadquery>=2.8.0",
+    "numpy>=2.5.3",
+    "rtree>=1.4.1",
+    "scipy>=1.18.1",
+    "trimesh>=5.1.0",
+]
+
+[project.scripts]
+impeller-pipeline = "impeller_pipeline:main"
+
+[build-system]
+requires = ["uv_build>=0.12.10,<0.13.0"]
+build-backend = "uv_build"
