@@ -5,7 +5,7 @@ import { OverlayScene } from './OverlayScene'
 import type { Meta } from './types'
 import './App.css'
 
-const DEFAULT_CLAMP = 3.5
+const DEFAULT_CLAMP = 5
 
 export default function App() {
   const [meta, setMeta] = useState<Meta | null>(null)
@@ -99,7 +99,7 @@ export default function App() {
           onChange={(e) => setClampMm(Number(e.target.value))}
         />
         <div className="hint mono">
-          Drag low (~0.15) to inspect noise. Keep near 3–4 mm for scoops.
+          Drag low (~0.15) to inspect noise. Keep near 5 mm for scoops.
           Hover a box for L × W × D.
         </div>
 

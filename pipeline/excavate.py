@@ -5,6 +5,7 @@ from __future__ import annotations
 
 import math
 import shutil
+import tempfile
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -36,7 +37,12 @@ N_FLAT = 20  # ~10 top + ~10 bottom axial flats
 N_OTHER = 10  # fins / body
 MIN_SPACING_MM = 30.0
 BORE_CLEARANCE_MM = 55.0  # keep away from hub bore (~38.5 mm radius)
-TESS_TOLERANCE = 0.35  # mm — fine enough for 12–28 mm scoops
+MAX_SCOOP_DEPTH_MM = 5.0
+# Isotropic surface mesh: equal min/max edge length so triangles stay
+# near-equilateral instead of stretching along the CAD surface.
+TESS_EDGE_MM = 2.5
+# Chordal error cap used only if the isotropic mesher falls back to OCCT.
+TESS_TOLERANCE = 0.35
 NOISE_SIGMA_MM = 0.05
 FLAT_NORMAL_DOT = 0.85  # |n · axis| above this ⇒ axial flat face
 
@@ -46,9 +52,9 @@ AXIS_DIR = np.array([1.0, 0.0, 0.0])
 
 SIZE_BANDS = [
     # (label, diameter_range_mm, depth_range_mm, weight)
-    ("small", (12.0, 16.0), (1.5, 2.0), 0.35),
-    ("medium", (16.0, 22.0), (2.0, 2.8), 0.40),
-    ("large", (22.0, 28.0), (2.8, 3.5), 0.25),
+    ("small", (12.0, 16.0), (2.0, 3.2), 0.30),
+    ("medium", (16.0, 22.0), (3.2, 4.2), 0.40),
+    ("large", (22.0, 28.0), (4.2, MAX_SCOOP_DEPTH_MM), 0.30),
 ]
 
 
@@ -337,14 +343,14 @@ def select_sites(
                 continue
 
             thickness = local_thickness(solid, pt, nm)
-            if thickness < 2.0:
+            if thickness < 2.5:
                 continue
             band, diameter, depth = pick_size(rng)
-            max_depth = max(0.8, 0.4 * thickness)
+            # Allow scoops up to 5 mm, but stay inside about half the local wall.
+            max_depth = min(MAX_SCOOP_DEPTH_MM, max(1.5, 0.5 * thickness))
             depth = min(depth, max_depth)
             if thickness < 8.0:
-                diameter = min(diameter, 16.0)
-                depth = min(depth, 2.0)
+                diameter = min(diameter, 18.0)
 
             # Footprint for bbox: slightly elongated irregular scoop
             aspect = float(rng.uniform(0.88, 1.12))
@@ -588,15 +594,141 @@ def cut_scoops(solid: cq.Solid, sites: list[Site], rng: np.random.Generator) -> 
     return work, kept
 
 
-def solid_to_trimesh(solid: cq.Solid, tolerance: float = TESS_TOLERANCE) -> trimesh.Trimesh:
-    verts, faces = solid.tessellate(tolerance)
-    v = np.array([[p.x, p.y, p.z] for p in verts], dtype=np.float64)
-    f = np.array(faces, dtype=np.int64)
-    mesh = trimesh.Trimesh(vertices=v, faces=f, process=False)
+def _set_gmsh_option(gmsh, name: str, value: float) -> None:
+    try:
+        gmsh.option.setNumber(name, value)
+    except Exception:
+        pass
+
+
+def _mesh_from_triangles(vertices: np.ndarray, faces: np.ndarray) -> trimesh.Trimesh:
+    mesh = trimesh.Trimesh(vertices=vertices, faces=faces, process=False)
     mesh.merge_vertices()
     mesh.update_faces(mesh.unique_faces())
     mesh.remove_unreferenced_vertices()
+    mesh.fix_normals()
     return mesh
+
+
+def _log_mesh_isotropy(mesh: trimesh.Trimesh, label: str) -> None:
+    """Print edge-length spread and triangle aspect ratio (1 = equilateral)."""
+    if len(mesh.faces) == 0:
+        print(f"  {label}: empty mesh")
+        return
+    edges = mesh.edges_unique_length
+    tri = mesh.triangles
+    lengths = np.linalg.norm(
+        np.stack(
+            [
+                tri[:, 0] - tri[:, 1],
+                tri[:, 1] - tri[:, 2],
+                tri[:, 2] - tri[:, 0],
+            ],
+            axis=1,
+        ),
+        axis=2,
+    )
+    aspect = lengths.max(axis=1) / np.maximum(lengths.min(axis=1), 1e-9)
+    print(
+        f"  {label}: {len(mesh.vertices)} verts, {len(mesh.faces)} faces; "
+        f"edge mm p10/p50/p90 "
+        f"{np.percentile(edges, 10):.2f}/"
+        f"{np.percentile(edges, 50):.2f}/"
+        f"{np.percentile(edges, 90):.2f}; "
+        f"aspect p50/p90 {np.median(aspect):.2f}/{np.percentile(aspect, 90):.2f}"
+    )
+
+
+def isotropic_mesh_step(step_path: Path, edge_mm: float = TESS_EDGE_MM) -> trimesh.Trimesh:
+    """Frontal-Delaunay surface mesh with a uniform target edge length.
+
+    Min and max size are the same, and curvature-based sizing is off, so the
+    tessellation is isotropic. Call this before any vertex noise.
+    """
+    import gmsh
+
+    gmsh.initialize()
+    try:
+        gmsh.option.setNumber("General.Terminal", 0)
+        gmsh.logger.start()
+        # Uniform size in every direction, then Frontal-Delaunay (algo 6).
+        for key in (
+            "Mesh.MeshSizeMin",
+            "Mesh.MeshSizeMax",
+            "Mesh.CharacteristicLengthMin",
+            "Mesh.CharacteristicLengthMax",
+        ):
+            _set_gmsh_option(gmsh, key, edge_mm)
+        _set_gmsh_option(gmsh, "Mesh.Algorithm", 6)
+        _set_gmsh_option(gmsh, "Mesh.MeshSizeFromCurvature", 0)
+        _set_gmsh_option(gmsh, "Mesh.MeshSizeFromPoints", 0)
+        _set_gmsh_option(gmsh, "Mesh.MeshSizeExtendFromBoundary", 0)
+        _set_gmsh_option(gmsh, "Mesh.CharacteristicLengthFromCurvature", 0)
+        _set_gmsh_option(gmsh, "Mesh.CharacteristicLengthExtendFromBoundary", 0)
+        _set_gmsh_option(gmsh, "Mesh.Smoothing", 10)
+
+        gmsh.model.add("impeller")
+        gmsh.model.occ.importShapes(str(step_path))
+        gmsh.model.occ.removeAllDuplicates()
+        gmsh.model.occ.synchronize()
+        # Constant background field so interior edges match the boundary size.
+        field = gmsh.model.mesh.field.add("MathEval")
+        gmsh.model.mesh.field.setString(field, "F", f"{edge_mm}")
+        gmsh.model.mesh.field.setAsBackgroundMesh(field)
+        point_entities = gmsh.model.getEntities(0)
+        if point_entities:
+            gmsh.model.mesh.setSize(point_entities, edge_mm)
+
+        gmsh.model.mesh.generate(2)
+        node_tags, coords, _ = gmsh.model.mesh.getNodes()
+        if len(node_tags) == 0:
+            log = "\n".join(gmsh.logger.get()[-30:])
+            raise RuntimeError(f"gmsh returned no nodes\n{log}")
+        vertices = np.array(coords, dtype=np.float64).reshape(-1, 3)
+        tag_to_i = {int(tag): i for i, tag in enumerate(node_tags)}
+
+        elem_types, _, elem_nodes = gmsh.model.mesh.getElements(dim=2)
+        face_blocks: list[np.ndarray] = []
+        for etype, nodes in zip(elem_types, elem_nodes):
+            nodes_arr = np.array(nodes, dtype=np.int64)
+            if int(etype) == 2:
+                mapped = np.array(
+                    [tag_to_i[int(t)] for t in nodes_arr], dtype=np.int64
+                ).reshape(-1, 3)
+                face_blocks.append(mapped)
+            elif int(etype) == 3:
+                quads = np.array(
+                    [tag_to_i[int(t)] for t in nodes_arr], dtype=np.int64
+                ).reshape(-1, 4)
+                face_blocks.append(quads[:, [0, 1, 2]])
+                face_blocks.append(quads[:, [0, 2, 3]])
+        if not face_blocks:
+            log = "\n".join(gmsh.logger.get()[-30:])
+            raise RuntimeError(f"gmsh returned no surface elements\n{log}")
+        faces = np.vstack(face_blocks)
+    finally:
+        gmsh.finalize()
+
+    return _mesh_from_triangles(vertices, faces)
+
+
+def solid_to_trimesh(solid: cq.Solid, edge_mm: float = TESS_EDGE_MM) -> trimesh.Trimesh:
+    """Isotropic tessellation of a solid. Does not apply noise."""
+    with tempfile.TemporaryDirectory() as tmp:
+        step_path = Path(tmp) / "solid.step"
+        export_step(solid, step_path)
+        try:
+            return isotropic_mesh_step(step_path, edge_mm)
+        except Exception as exc:
+            print(f"  isotropic gmsh mesh failed ({exc}); falling back to OCCT deflection")
+    return _occt_deflection_mesh(solid, TESS_TOLERANCE)
+
+
+def _occt_deflection_mesh(solid: cq.Solid, tolerance: float) -> trimesh.Trimesh:
+    verts, faces = solid.tessellate(tolerance)
+    v = np.array([[p.x, p.y, p.z] for p in verts], dtype=np.float64)
+    f = np.array(faces, dtype=np.int64)
+    return _mesh_from_triangles(v, f)
 
 
 def add_normal_noise(mesh: trimesh.Trimesh, sigma: float, rng: np.random.Generator) -> trimesh.Trimesh:
@@ -679,14 +811,22 @@ def main() -> None:
     export_step(excavated, OUT / "excavated.stp")
     print(f"Wrote {OUT / 'excavated.stp'}")
 
-    # 4. Tessellate
-    print(f"Tessellating (tol={TESS_TOLERANCE} mm)…")
-    mesh_orig = solid_to_trimesh(solid, TESS_TOLERANCE)
-    mesh_exc = solid_to_trimesh(excavated, TESS_TOLERANCE)
-    print(f"  original mesh: {len(mesh_orig.vertices)} verts, {len(mesh_orig.faces)} faces")
-    print(f"  excavated mesh: {len(mesh_exc.vertices)} verts, {len(mesh_exc.faces)} faces")
+    # 4. Isotropic tessellation of the CAD surfaces. Noise comes after this.
+    print(f"Tessellating isotropically (edge={TESS_EDGE_MM} mm)…")
 
-    # 5. Noise on excavated only
+    def _tessellate(step_path: Path, solid_fallback: cq.Solid, label: str) -> trimesh.Trimesh:
+        try:
+            mesh = isotropic_mesh_step(step_path, TESS_EDGE_MM)
+        except Exception as exc:
+            print(f"  {label}: isotropic gmsh mesh failed ({exc}); using OCCT deflection")
+            mesh = _occt_deflection_mesh(solid_fallback, TESS_TOLERANCE)
+        _log_mesh_isotropy(mesh, label)
+        return mesh
+
+    mesh_orig = _tessellate(OUT / "original.stp", solid, "original")
+    mesh_exc = _tessellate(OUT / "excavated.stp", excavated, "excavated")
+
+    # 5. Gaussian noise only on the already-tessellated excavated mesh.
     print(f"Adding Gaussian normal noise σ={NOISE_SIGMA_MM} mm…")
     mesh_mod = add_normal_noise(mesh_exc, NOISE_SIGMA_MM, rng)
 
@@ -710,6 +850,9 @@ def main() -> None:
         "mean_deviation_mm": float(deviation.mean()),
         "excavation_count": len(kept),
         "noise_sigma_mm": NOISE_SIGMA_MM,
+        "tessellation": "isotropic",
+        "tess_edge_mm": TESS_EDGE_MM,
+        "max_scoop_depth_mm": MAX_SCOOP_DEPTH_MM,
         "units": "mm",
         "sites": [
             {
