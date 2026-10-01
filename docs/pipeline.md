@@ -99,6 +99,7 @@ For each successful site, meta includes an oriented box:
 | `output/modified.glb` | Tessellated excavated + noise |
 | `output/deviation.bin` | Per-vertex distances (mm) |
 | `output/meta.json` | Counts, sites, bboxes |
+| `output/indications.csv` | Indication ID, length, width, depth, and surface X, Y, Z (mm) |
 | `viewer/public/models/*` | Same assets for the Vite app |
 
 ## Tuning knobs
