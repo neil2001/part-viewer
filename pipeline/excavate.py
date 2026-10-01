@@ -756,6 +756,37 @@ def write_deviation_bin(path: Path, deviation: np.ndarray) -> None:
     deviation.astype("<f4").tofile(path)
 
 
+def write_indications_csv(path: Path, sites: list[dict]) -> None:
+    """Write one row per indication.
+
+    Length, width, and depth are the oriented box (mm). X, Y, Z are the
+    surface point of the indication on the part, in the STEP coordinate
+    system (mm), not the inset box center.
+    """
+    import csv
+
+    path.parent.mkdir(parents=True, exist_ok=True)
+    with path.open("w", newline="") as handle:
+        writer = csv.writer(handle)
+        writer.writerow(
+            ["indication_id", "length_mm", "width_mm", "depth_mm", "x_mm", "y_mm", "z_mm"]
+        )
+        for indication_id, site in enumerate(sites, start=1):
+            bbox = site["bbox"]
+            x_mm, y_mm, z_mm = site["point"]
+            writer.writerow(
+                [
+                    indication_id,
+                    bbox["length_mm"],
+                    bbox["width_mm"],
+                    bbox["depth_mm"],
+                    x_mm,
+                    y_mm,
+                    z_mm,
+                ]
+            )
+
+
 def export_step(solid: cq.Solid, path: Path) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     cq.exporters.export(solid, str(path), exportType="STEP")
@@ -871,6 +902,8 @@ def main() -> None:
 
     (OUT / "meta.json").write_text(json.dumps(meta, indent=2))
     print(f"Wrote {OUT / 'meta.json'}")
+    write_indications_csv(OUT / "indications.csv", meta["sites"])
+    print(f"Wrote {OUT / 'indications.csv'}")
 
     # Copy into viewer public folder if it exists (or create it)
     VIEWER_MODELS.mkdir(parents=True, exist_ok=True)
