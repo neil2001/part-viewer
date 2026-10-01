@@ -71,7 +71,7 @@ t = clamp(d / C, 0, 1)
 color = blue → yellow → red by t
 ```
 
-- Clamp ≈ **3.5 mm** — scoop cavities dominate  
+- Clamp ≈ **5 mm** — scoop cavities dominate  
 - Clamp ≈ **0.15 mm** — σ = 0.05 mm noise is visible as speckle  
 
 ### Indication boxes

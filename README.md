@@ -46,7 +46,7 @@ Open the URL Vite prints (default [http://127.0.0.1:5173](http://127.0.0.1:5173)
 - **Original (ghost)** — translucent unmodified mesh  
 - **Modified heatmap** — excavated + noisy mesh colored by deviation  
 - **Indication boxes** — wireframes around each scoop; hover for L × W × D (mm)  
-- **Heatmap clamp** — set ~3–4 mm for scoops, ~0.15 mm to see surface noise  
+- **Heatmap clamp** — set ~5 mm for scoops, ~0.15 mm to see surface noise  
 
 Orbit with the mouse; scroll to zoom.
 

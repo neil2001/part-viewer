@@ -8,11 +8,16 @@ authors = [
 requires-python = ">=3.12"
 dependencies = [
     "cadquery>=2.8.0",
+    "gmsh>=4.13.0",
     "numpy>=2.5.3",
     "rtree>=1.4.1",
     "scipy>=1.18.1",
     "trimesh>=5.1.0",
 ]
+
+# excavate.py is the entrypoint; there is no installable impeller_pipeline package.
+[tool.uv]
+package = false
 
 [project.scripts]
 impeller-pipeline = "impeller_pipeline:main"
